@@ -57,3 +57,79 @@ describe("#9 foreign-i18n recognition (end-to-end via run())", () => {
     expect(wrapped.has("Genuine hardcoded label")).toBe(true);
   });
 });
+
+// Lingui MACRO forms — the dominant real-world Lingui style (proven by the
+// Bluesky benchmark: `_(msg`…`)` outnumbers `<Trans>` there). The original #9
+// guard recognized only `<Trans>`, so all three of these shapes re-wrapped
+// already-translated text — and the tagged-template form additionally CRASHED
+// `mutate` (a `replaceWith(callExpression)` on a TaggedTemplateExpression
+// `.quasi` violates a babel AST invariant). Regression corpus drawn from real
+// Bluesky source shapes.
+const LINGUI_MACRO_SRC = `
+import React from "react";
+import { msg, Plural } from "@lingui/macro";
+import { useLingui } from "@lingui/react";
+
+export function Settings() {
+  const { _ } = useLingui();
+  return (
+    <View>
+      {/* tagged-template macro, runtime-wrapped — the crash + FP case */}
+      <Toggle.Item label={_(msg\`Require alt text before posting\`)} name="alt" />
+      {/* descriptor-CALL macro with message/context object keys */}
+      <Toggle.Item
+        label={_(msg({ context: "icon variant", message: "Light" }))}
+        name="light"
+      />
+      {/* Lingui plural JSX component — one/other hold translated forms */}
+      <Plural value={n} one="# contact found" other="# contacts found" />
+      {/* genuine hardcoded copy in the same file — recall must survive */}
+      <Toggle.Item label="Receive push notifications" name="push" />
+    </View>
+  );
+}
+`;
+
+describe("Lingui macro forms (Bluesky regression corpus)", () => {
+  it("does not wrap strings inside Lingui macro / plural constructs", async () => {
+    const res = await run("/virtual/Settings.tsx", LINGUI_MACRO_SRC, {
+      dryRun: true,
+    });
+    const wrapped = new Set(res.wrapped.map((r) => r.node.text));
+    const verdictOf = (text: string) =>
+      res.nodes.find((n) => n.text === text)?.verdict;
+
+    // tagged-template macro `_(msg`…`)`
+    expect(wrapped.has("Require alt text before posting")).toBe(false);
+    expect(verdictOf("Require alt text before posting")).toBe(Verdict.Skip);
+    // descriptor-call macro `msg({ message, context })`
+    expect(wrapped.has("Light")).toBe(false);
+    expect(wrapped.has("icon variant")).toBe(false);
+    // <Plural one/other>
+    expect(wrapped.has("# contact found")).toBe(false);
+    expect(wrapped.has("# contacts found")).toBe(false);
+  });
+
+  it("still finds genuine hardcoded copy alongside Lingui macros", async () => {
+    const res = await run("/virtual/Settings.tsx", LINGUI_MACRO_SRC, {
+      dryRun: true,
+    });
+    const wrapped = new Set(res.wrapped.map((r) => r.node.text));
+    expect(wrapped.has("Receive push notifications")).toBe(true);
+  });
+
+  it("mutate does not crash on a `msg`…`` tagged template (babel quasi invariant)", async () => {
+    // The original bug: extract threw `TypeError: Property quasi of
+    // TaggedTemplateExpression expected node to be of a type ["TemplateLiteral"]`
+    // and aborted the whole run. A non-dry-run pass must complete and leave the
+    // already-translated macro text untouched in the output.
+    const res = await run("/virtual/Settings.tsx", LINGUI_MACRO_SRC, {
+      dryRun: false,
+    });
+    expect(res.modifiedContent).toBeDefined();
+    const out = res.modifiedContent ?? "";
+    // The macro text is still inside `msg` — NOT double-wrapped in `t(...)`.
+    expect(out).toContain("Require alt text before posting");
+    expect(out).not.toMatch(/t\(["'][^"']*Require alt text/);
+  });
+});

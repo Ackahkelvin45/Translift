@@ -65,11 +65,40 @@ const I18N_CALL_NAMES = new Set([
   "defineMessages",
   "defineMessage",
   "$t",
+  // Lingui descriptor-CALL macros: `msg({ message, context })`,
+  // `plural(n, {...})`, etc. The tagged-template forms (`msg`…``) are handled
+  // separately via LINGUI_MACRO_TAGS; this set covers the call form, whose
+  // `message`/`context` object values would otherwise hit the object-property
+  // sink and get re-wrapped (real shape seen in Bluesky AppIconSettings).
+  // `t` is deliberately omitted — it's the callee TransLift itself produces.
+  "msg",
+  "plural",
+  "select",
+  "selectOrdinal",
 ]);
 const I18N_COMPONENT_NAMES = new Set([
   "FormattedMessage",
   "FormattedHTMLMessage",
   "Trans",
+  // Lingui plural/select JSX components — their `one`/`other`/`=0` etc. props
+  // hold already-translated message forms (real shape: Bluesky
+  // `<Plural one="# contact found" other="# contacts found" />`).
+  "Plural",
+  "Select",
+  "SelectOrdinal",
+]);
+// Lingui tagged-template macros — `msg`…``, `t`…``, `plural`…``, etc. Their
+// quasi text is ALREADY translated (the macro extracts it at build time), so the
+// string inside must not be re-wrapped. This is the macro-call counterpart to
+// the `<Trans>` JSX form in I18N_COMPONENT_NAMES; Bluesky (real Lingui code)
+// uses `_(msg`…`)` far more than `<Trans>`, and that path was previously unseen.
+const LINGUI_MACRO_TAGS = new Set([
+  "msg",
+  "t",
+  "plural",
+  "selectOrdinal",
+  "select",
+  "defineMessage",
 ]);
 
 export class ReactAdapter implements Adapter {
@@ -293,6 +322,19 @@ export class ReactAdapter implements Adapter {
         const loc = path.node.loc?.start;
         if (!loc) return;
         if (path.node.expressions.length > 0) return; // dynamic stays flagged
+        // Never replace a template literal that is the quasi of a tagged
+        // template (`msg`…``, `t`…``, `styled.div`…``, `gql`…``): babel's AST
+        // invariant forbids a non-TemplateLiteral in the `.quasi` slot, so a
+        // `replaceWith(callExpression)` here throws and aborts the whole run.
+        // The scoring layer (enclosingI18n) should already Skip Lingui macros;
+        // this is a fail-safe so any future mis-score degrades to a no-op
+        // instead of crashing.
+        if (
+          t.isTaggedTemplateExpression(path.parent) &&
+          path.parent.quasi === path.node
+        ) {
+          return;
+        }
         const key = locKey(loc.line, loc.column + 1);
         const r = byKey.get(key);
         if (!r) return;
@@ -498,6 +540,23 @@ function buildSignals(
         isI18nComponentName((p.node as t.JSXElement).openingElement.name)
     );
     if (i18nEl) enclosingI18n = true;
+  }
+
+  // Lingui tagged-template macro: the string is the quasi of `msg`…`` / `t`…`` /
+  // `plural`…``. Structural (parent is the TaggedTemplateExpression), so it also
+  // covers the common `_(msg`…`)` runtime-wrapped form — the wrapper is
+  // irrelevant. This is the macro-call analogue of the `<Trans>` check above.
+  if (!enclosingI18n) {
+    const tt = path.findParent((p) => p.isTaggedTemplateExpression());
+    if (tt) {
+      const tag = (tt.node as t.TaggedTemplateExpression).tag;
+      const tagName = t.isIdentifier(tag)
+        ? tag.name
+        : t.isMemberExpression(tag) && t.isIdentifier(tag.property)
+          ? tag.property.name
+          : null;
+      if (tagName && LINGUI_MACRO_TAGS.has(tagName)) enclosingI18n = true;
+    }
   }
 
   // URL / path shape.
