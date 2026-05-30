@@ -13,3 +13,17 @@ fixtures/phase-0/
 # Local reference checkouts for Phase 2 ts-morph prototype.
 excalidraw/
 graphify/
+
+# Internal planning / handoff / spec docs — kept locally, not published.
+SESSION-HANDOFF.md
+next-steps.md
+sink-registry-fixes-plan.md
+sink-registry-fixes-spec.md
+phase-2-spec.md
+phase-2-step-3-plan.md
+phase-2a-spec.md
+phase-0-summary.md
+newfeatures.md
+
+# Throwaway Phase 2 decision-gate prototype — kept locally, not published.
+prototype/
