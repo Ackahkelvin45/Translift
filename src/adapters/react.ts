@@ -464,6 +464,15 @@ function buildSignals(
   let propName: string | null = null;
   if (attrPath) propName = inJsxAttribute;
 
+  // Object-property key: `{ contextItemLabel: "Delete" }`. Only the DIRECT value
+  // (immediate parent is the ObjectProperty) qualifies — a string buried in an
+  // expression on the value side has a different parent and is left null.
+  let objectPropertyKey: string | null = null;
+  if (t.isObjectProperty(directParent) && directParent.value === path.node) {
+    if (t.isIdentifier(directParent.key)) objectPropertyKey = directParent.key.name;
+    else if (t.isStringLiteral(directParent.key)) objectPropertyKey = directParent.key.value;
+  }
+
   // Enclosing component discovery.
   const { componentName, enclosingFunctionIsComponent } =
     findEnclosingComponent(path);
@@ -480,6 +489,7 @@ function buildSignals(
     inUrlShape,
     isCodeIdentifier,
     propName,
+    objectPropertyKey,
     componentName,
     enclosingFunctionIsComponent,
     inFunctionSink,

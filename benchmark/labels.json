@@ -7,8 +7,12 @@
     { "text": "Close notification", "expect": "wrap", "category": "attribute sink (aria-label)" },
     { "text": "Your payment could not be processed.", "expect": "wrap", "category": "cross-file → <Toast> prop" },
     { "text": "Your changes have been saved.", "expect": "wrap", "category": "function sink alert()" },
+    { "text": "Shade", "expect": "wrap", "category": "attribute sink, identifier-shaped (IDENT_SHAPE twin)" },
     { "text": "banner wrapper-large", "expect": "skip", "category": "className (non-UI)" },
     { "text": "initializing analytics module", "expect": "skip", "category": "console.log (non-UI)" },
-    { "text": "https://api.example.com/v2/data", "expect": "skip", "category": "URL (non-UI)" }
+    { "text": "https://api.example.com/v2/data", "expect": "skip", "category": "URL (non-UI)" },
+    { "text": "0 0 24 24", "expect": "skip", "category": "SVG viewBox (non-UI)" },
+    { "text": "M4 4h16v16H4z", "expect": "skip", "category": "SVG path data (non-UI)" },
+    { "text": "translate(2 2)", "expect": "skip", "category": "SVG transform (non-UI)" }
   ]
 }

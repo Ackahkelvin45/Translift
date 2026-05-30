@@ -214,6 +214,15 @@ describe("isUiPropName — F5b blocklist", () => {
     expect(isUiPropName("aria-hidden")).toBe(false);
     expect(isUiPropName("aria-labelledby")).toBe(false);
   });
+
+  it("rejects SVG / CSS presentation attributes (real-codebase false positives)", () => {
+    // These reached Pass 2's type-driven uiProps inference and wrongly wrapped
+    // geometry/style values on the real Excalidraw checkout (`d="M39.9…"`,
+    // `viewBox="0 0 40 40"`, `transform="translate(…)"`, `size="var(…)"`).
+    for (const svg of ["d", "viewBox", "transform", "gradientTransform", "points", "fill", "stroke", "cx", "cy", "r", "x", "y", "width", "height", "offset", "size", "preserveAspectRatio"]) {
+      expect(isUiPropName(svg)).toBe(false);
+    }
+  });
 });
 
 describe("inferStringPropNames — F5b", () => {

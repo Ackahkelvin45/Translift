@@ -192,6 +192,37 @@ const EXACT_BLOCKLIST = new Set<string>([
   "tabIndex",
   "testID",
   "data-testid",
+  // SVG / CSS presentation attributes. These are string-typed but carry
+  // geometry, colors, and style values — never translatable copy. Without
+  // this group, values like `d="M39.9…"`, `viewBox="0 0 40 40"`,
+  // `transform="translate(…)"`, and `size="var(--icon-size,1rem)"` reach the
+  // weighted tier with the generic `+0.2` prop boost and wrongly wrap.
+  "d",
+  "viewBox",
+  "transform",
+  "gradientTransform",
+  "points",
+  "fill",
+  "stroke",
+  "cx",
+  "cy",
+  "r",
+  "x",
+  "y",
+  "x1",
+  "y1",
+  "x2",
+  "y2",
+  "width",
+  "height",
+  "offset",
+  "size",
+  "preserveAspectRatio",
+  "clipPath",
+  "fillRule",
+  "strokeWidth",
+  "strokeLinecap",
+  "strokeLinejoin",
 ]);
 
 /* -------------------------------------------------------------------------- */

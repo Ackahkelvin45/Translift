@@ -60,15 +60,26 @@ surfaces for review.
 | tool | precision | recall | silent misses |
 |---|---|---|---|
 | **TransLift** | 100% | 100% | **0** |
-| i18next-cli lint | 100% | 67% | 2 |
+| i18next-cli lint | 100% | 57% | 3 |
 
-Both tools nail direct JSX text and correctly skip `className` / `console` / URLs.
-The gap is the two strings that need to be resolved *beyond a single JSX literal* —
-a string declared in one file and passed cross-file into a `<Toast>` prop, and a
-`alert(...)` sink call — which a line-by-line linter silently drops. TransLift's
-symbol graph + sink registry catch both. See [benchmark/RESULTS.md](benchmark/RESULTS.md)
-(regenerate with `npm run benchmark`); the scale pass also reports raw counts +
-wall time on Excalidraw (~240 files).
+Both tools nail direct JSX text, correctly skip `className` / `console` / URLs, and
+leave SVG/CSS presentation values (`viewBox`, `d`, `transform`) alone. The gap is the
+strings that need resolution *beyond a single JSX literal*: a string declared in one
+file and passed cross-file into a `<Toast>` prop, an `alert(...)` sink call, and an
+identifier-shaped attribute-sink value (`aria-label="Shade"`) — all of which a
+line-by-line linter silently drops. TransLift's symbol graph + sink registry catch
+them.
+
+**Recall on real code.** A curated fixture overstates recall, so the harness also
+runs a *pre-i18n* pass: it checks out Excalidraw at the commit just before it adopted
+i18n and scores extraction against the strings the team actually translated. Current
+recall is **79%** (23/29); the remaining misses are documented limitations — labels
+declared in `.ts` files (only `.tsx`/`.jsx` are scanned) and `text:` object-property
+values (excluded to avoid wrapping element content). This number is the honest one to
+watch: the labeled fixture says 100%, real hardcoded code says 79%.
+
+See [benchmark/RESULTS.md](benchmark/RESULTS.md) (regenerate with `npm run benchmark`);
+the scale pass also reports raw counts + wall time on Excalidraw (~240 files).
 
 ## Configuration
 

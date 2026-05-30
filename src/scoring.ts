@@ -79,18 +79,17 @@ export function score(
     }
   }
 
-  // Code-identifier hard skip — now AFTER the explicit function-sink check so a
-  // registered sink wins, but still catches bare identifiers everywhere else.
-  if (s.isCodeIdentifier && !s.inJsxText) {
-    return { confidence: 0.9, verdict: Verdict.Skip };
-  }
-
-  // Hard wraps — decisive UI signals.
-  if (s.inJsxText && node.kind === StringKind.JsxText) {
-    return { confidence: 1.0, verdict: Verdict.Wrap, source: "jsx-text" };
-  }
-
-  // Attribute sinks.
+  // Attribute sinks. This MUST run before the code-identifier skip below for
+  // the same reason the function-sink check does: a registered attribute sink
+  // (`aria-label`, `title`, …) has to beat the IDENT_SHAPE heuristic, otherwise
+  // an identifier-shaped value like `aria-label="Shade"` is silently skipped.
+  //
+  // But only the *direct* attribute value earns that win. A string buried in the
+  // attribute's expression — a comparison operand (`title={x === "rectangle"}`),
+  // a `t()` argument, a `||` fallback — carries `inJsxAttribute` too (the signal
+  // walks up to any JSX ancestor) yet isn't the attribute's text. For those we
+  // only wrap when the string isn't identifier-shaped (preserving prior
+  // behavior); identifier-shaped buried strings fall through to the skip below.
   if (s.inJsxAttribute) {
     const attrSink = registry.attributes.find(a => a.name === s.inJsxAttribute);
     if (attrSink) {
@@ -99,11 +98,46 @@ export function score(
       const allowed = attrSink.onElements
         ? attrSink.onElements.includes(element)
         : true;
-      if (allowed && !blocked) {
+      if (blocked) return { confidence: 0.9, verdict: Verdict.Skip };
+      const isDirectValue = node.kind === StringKind.JsxAttribute;
+      if (allowed && (isDirectValue || !s.isCodeIdentifier)) {
         return { confidence: 0.95, verdict: Verdict.Wrap, source: "attribute-sink" };
       }
-      if (blocked) return { confidence: 0.9, verdict: Verdict.Skip };
     }
+  }
+
+  // Object-property sinks (gated heuristic). A string that is the direct value
+  // of an object property whose KEY names copy — `contextItemLabel: "Delete"`,
+  // `label: "Copy"`, `{ value: "Helvetica", text: "Normal" }` — is almost always
+  // UI text. Real-world recall depends on this: action/menu/option labels are
+  // routinely declared as object properties, never reaching JSX. Like the
+  // attribute-sink check it must run BEFORE the code-identifier skip, or
+  // single-word labels ("Copy", "Delete") die on IDENT_SHAPE.
+  //
+  // Gated tightly on the key name (`isUiCopyPropName`, the same inclusion set as
+  // F7's JSX-attribute boost) so the vast majority of object properties —
+  // `type`, `id`, `key`, config values, AST fields — are untouched. `value` next
+  // to a copy-bearing `text`/`label` is itself a code value and is NOT in the
+  // set, so it stays skipped.
+  if (
+    node.kind === StringKind.ObjectProperty &&
+    s.objectPropertyKey &&
+    isUiCopyObjectKey(s.objectPropertyKey) &&
+    !looksLikeKeyOrEmptyValue(node.text)
+  ) {
+    return { confidence: 0.9, verdict: Verdict.Wrap, source: "object-property-sink" };
+  }
+
+  // Code-identifier hard skip — now AFTER the explicit function-, attribute-,
+  // and object-property-sink checks so a recognized sink wins, but still catches
+  // bare identifiers everywhere else.
+  if (s.isCodeIdentifier && !s.inJsxText) {
+    return { confidence: 0.9, verdict: Verdict.Skip };
+  }
+
+  // Hard wraps — decisive UI signals.
+  if (s.inJsxText && node.kind === StringKind.JsxText) {
+    return { confidence: 1.0, verdict: Verdict.Wrap, source: "jsx-text" };
   }
 
   // Weighted scoring for ambiguous strings. The per-term breakdown lives in
@@ -201,6 +235,36 @@ function isUiCopyPropName(prop: string): boolean {
   return UI_COPY_PROP_SUFFIX.test(prop);
 }
 
+/**
+ * Like `isUiCopyPropName` but for OBJECT-PROPERTY keys, which are far more
+ * polysemous than JSX-attribute names: `text`, `title`, `content`, and
+ * `description` routinely hold *data* (text-element content, chart/demo data,
+ * MIME descriptions) rather than UI copy, and bare `label` often holds a
+ * translation *key* (`label: "labels.alignTop"`). An Excalidraw spot-check of
+ * the naive (reuse-`isUiCopyPropName`) version produced 159 wraps, ~150 of them
+ * false — almost entirely from `text`/`title`/`label`. So this set deliberately
+ * EXCLUDES those data-polysemous keys and keeps only keys that are reliably
+ * copy: `*Label`/`label`, the `message` family, `tooltip`, `placeholder`, etc.
+ * The remaining `label` ambiguity (key-shaped values) is handled by
+ * `looksLikeKeyOrEmptyValue` at the call site.
+ */
+function isUiCopyObjectKey(key: string): boolean {
+  if (UI_COPY_OBJECT_KEY_EXACT.has(key)) return true;
+  return UI_COPY_OBJECT_KEY_SUFFIX.test(key);
+}
+
+/**
+ * Value-shape guard for object-property sinks: reject values that are clearly
+ * not display copy even under a copy-bearing key. Two shapes:
+ *  - a translation key already (`labels.alignTop`, `buttons.save`) — dotted
+ *    identifier segments, no whitespace; wrapping it would double-key it;
+ *  - empty / whitespace-only.
+ */
+function looksLikeKeyOrEmptyValue(text: string): boolean {
+  if (text.trim() === "") return true;
+  return /^[A-Za-z][\w-]*(\.[A-Za-z][\w-]*)+$/.test(text);
+}
+
 /** One contributing term in the weighted score, with a human-readable label. */
 export interface WeightedTerm {
   label: string;
@@ -243,8 +307,38 @@ export function weightedSignals(node: StringNode): WeightedTerm[] {
   add(/^[a-z][a-zA-Z]*$/.test(t), "single lowercase identifier", -0.2);
   add(/^[A-Z_]+$/.test(t), "SCREAMING_CASE constant", -0.3);
   add(/^\d+$/.test(t), "purely numeric", -0.5);
+  // Value-shape skip for SVG geometry / CSS values. Catches the cases the
+  // structural prop-name blocklist misses (differently-named props, or values
+  // that are unambiguously non-text regardless of prop): SVG path data, numeric
+  // coordinate lists, `var(...)`/`calc(...)`, and CSS transform functions.
+  // Decisive (-0.6) so it overrides the component/whitespace lifts these can
+  // otherwise pick up. Mutually exclusive shapes, so at most one fires.
+  add(looksLikeStyleOrGeometryValue(t), "SVG/CSS value shape (non-text)", -0.6);
 
   return terms;
+}
+
+/**
+ * Heuristic: does this string look like an SVG geometry or CSS value rather
+ * than human-readable copy? Deliberately narrow to avoid catching real text:
+ * each branch requires structural punctuation/commands a sentence wouldn't have.
+ */
+function looksLikeStyleOrGeometryValue(t: string): boolean {
+  // `var(--x, …)`, `calc(…)`, `url(…)`, `rgb/rgba/hsl(…)`.
+  if (/^(?:var|calc|url|rgba?|hsla?)\s*\(/.test(t)) return true;
+  // CSS transform function list: `translate(…)`, `rotate(…) scale(…)`, `matrix(…)`.
+  if (/^(?:translate|translateX|translateY|rotate|scale|scaleX|scaleY|skew|skewX|skewY|matrix)\s*\(/.test(t)) {
+    return true;
+  }
+  // Numeric coordinate / dimension list: `0 0 40 40`, `1.5,2 3,4` — only digits,
+  // separators, signs, units. Requires ≥2 numbers so a lone `42` isn't caught here.
+  if (/^[\d.\s,+%-]*\d[\d.\s,+%-]*$/.test(t) && /\d[\s,].*\d/.test(t)) return true;
+  // SVG path data: starts with a path command + number, and the whole string is
+  // only path commands, digits, and separators (no prose letters).
+  if (/^[MmLlHhVvCcSsQqTtAaZz]\s*[-\d.]/.test(t) && /^[MmLlHhVvCcSsQqTtAaZz\d.\s,+\-eE]+$/.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 /** Clamped sum of `weightedSignals` — the weighted confidence in [0, 1]. */
@@ -274,3 +368,27 @@ const UI_COPY_PROP_EXACT = new Set<string>([
 
 const UI_COPY_PROP_SUFFIX =
   /(?:Label|Message|Text|Title|Description|Caption|Heading|Tooltip|Placeholder|Hint|Subtitle)$/;
+
+// Object-property keys reliably carrying display copy. Intentionally a STRICT
+// subset of the JSX set: `text`, `title`, `content`, `description`, `header`,
+// and the `*Text`/`*Title`/`*Description` suffixes are omitted because as object
+// keys they overwhelmingly hold data, not copy (proven by the Excalidraw FP
+// spot-check). `label` stays, paired with the `looksLikeKeyOrEmptyValue` guard.
+const UI_COPY_OBJECT_KEY_EXACT = new Set<string>([
+  "label",
+  "contextItemLabel",
+  "message",
+  "errorMessage",
+  "tooltip",
+  "placeholder",
+  "caption",
+  "heading",
+  "subtitle",
+  "hint",
+  "alt",
+  "ariaLabel",
+  "aria-label",
+]);
+
+const UI_COPY_OBJECT_KEY_SUFFIX =
+  /(?:Label|Message|Tooltip|Placeholder|Caption|Hint)$/;

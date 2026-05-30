@@ -23,6 +23,7 @@ function validSignals(): StringSignals {
     inUrlShape: false,
     isCodeIdentifier: false,
     propName: null,
+    objectPropertyKey: null,
     componentName: null,
     enclosingFunctionIsComponent: false,
     inFunctionSink: null,

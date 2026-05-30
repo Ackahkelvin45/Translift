@@ -20,6 +20,7 @@ export enum StringKind {
 export type ConfidenceSource =
   | "jsx-text"
   | "attribute-sink"
+  | "object-property-sink"
   | "function-sink"
   | "weighted"
   | "traced";
@@ -44,6 +45,13 @@ export interface StringSignals {
   inUrlShape: boolean;
   isCodeIdentifier: boolean;
   propName: string | null;
+  /**
+   * When the string is the direct value of an object property
+   * (`{ contextItemLabel: "Delete" }`), the property's key name. Lets scoring
+   * gate copy-bearing object properties the same way it gates JSX attributes.
+   * Null otherwise.
+   */
+  objectPropertyKey: string | null;
   componentName: string | null;
   enclosingFunctionIsComponent: boolean;
   inFunctionSink: { name: string; argIndex: number } | null;

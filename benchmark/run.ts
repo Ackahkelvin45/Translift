@@ -20,6 +20,7 @@
  */
 import { spawnSync } from "child_process";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { walk } from "../src/walker";
 import { buildProjectGraph } from "../src/graph-project";
@@ -58,11 +59,17 @@ function loadLabels(): Label[] {
 
 /* ----------------------------- TransLift ---------------------------------- */
 
-async function transliftOutcomes(): Promise<Map<string, ToolOutcome>> {
-  const { files, root } = walk(CASES_DIR);
+/**
+ * Run the TransLift pipeline over every file under `target` and return the
+ * strongest outcome seen per unique text. Shared by the labeled-fixture scorer
+ * and the pre-i18n recall stage.
+ */
+async function transliftOutcomesFor(target: string): Promise<Map<string, ToolOutcome>> {
+  const { files, root } = walk(target);
   const config = resolveConfig({}, null);
   const graphContext = buildProjectGraph(root, files);
   const shared = new Set<string>();
+  const rank: Record<string, number> = { wrap: 3, surfaced: 2, silent: 1 };
   const byText = new Map<string, ToolOutcome>();
 
   for (const file of files) {
@@ -75,11 +82,15 @@ async function transliftOutcomes(): Promise<Map<string, ToolOutcome>> {
           : n.verdict === Verdict.Unresolved || n.verdict === Verdict.Escalate || n.verdict === Verdict.FlagDynamic
             ? "surfaced"
             : "silent";
-      // First occurrence wins; fixture texts are unique.
-      if (!byText.has(n.text)) byText.set(n.text, { result });
+      const prev = byText.get(n.text);
+      if (!prev || rank[result] > rank[prev.result]) byText.set(n.text, { result });
     }
   }
   return byText;
+}
+
+async function transliftOutcomes(): Promise<Map<string, ToolOutcome>> {
+  return transliftOutcomesFor(CASES_DIR);
 }
 
 /* ----------------------------- i18next-cli -------------------------------- */
@@ -169,6 +180,84 @@ function scaleRun(): string {
   return `TransLift on Excalidraw (~240 files): \`${line?.trim() ?? "n/a"}\` in ${secs}s wall.`;
 }
 
+/* ------------------------------- recall ----------------------------------- */
+
+interface RecallSpec {
+  repo: string;
+  subdir: string;
+  beforeCommit: string;
+  groundTruth: string[];
+  expectedRecallPct: number;
+}
+
+/**
+ * The hardest direction to measure: does the tool FIND genuinely-hardcoded
+ * strings? The labeled fixture can't answer this (it's tiny and curated). So we
+ * check out a real repo at the commit just before it adopted i18n, run
+ * extraction, and score against the strings the maintainers actually translated
+ * (`recall-excalidraw.json`). Uses a throwaway git worktree so the live checkout
+ * is untouched. Skipped gracefully when the checkout or commit isn't available.
+ */
+async function recallRun(): Promise<string> {
+  const specPath = path.join(BENCH_DIR, "recall-excalidraw.json");
+  if (!fs.existsSync(specPath)) return "_No recall spec — skipped._";
+  const spec = JSON.parse(fs.readFileSync(specPath, "utf-8")) as RecallSpec;
+
+  const repoDir = path.join(process.cwd(), spec.repo);
+  if (!fs.existsSync(path.join(repoDir, ".git"))) {
+    return `_${spec.repo} checkout not present — recall stage skipped._`;
+  }
+  // Verify the pre-i18n commit is reachable (full history, not a shallow clone).
+  const probe = spawnSync("git", ["-C", repoDir, "rev-parse", "--verify", spec.beforeCommit], {
+    encoding: "utf-8",
+  });
+  if (probe.status !== 0) {
+    return `_${spec.repo} history doesn't reach ${spec.beforeCommit} (shallow clone?) — recall stage skipped._`;
+  }
+
+  const wt = path.join(os.tmpdir(), "translift-recall-" + spec.repo);
+  spawnSync("git", ["-C", repoDir, "worktree", "remove", "--force", wt], { encoding: "utf-8" });
+  const add = spawnSync("git", ["-C", repoDir, "worktree", "add", "-d", wt, spec.beforeCommit], {
+    encoding: "utf-8",
+  });
+  if (add.status !== 0) return "_Couldn't create recall worktree — skipped._";
+
+  try {
+    const outcomes = await transliftOutcomesFor(path.join(wt, spec.subdir));
+    const byLcText = new Map<string, string>();
+    for (const [text, o] of outcomes) {
+      const k = text.trim().toLowerCase();
+      const rank: Record<string, number> = { wrap: 3, surfaced: 2, silent: 1 };
+      const prev = byLcText.get(k);
+      if (!prev || rank[o.result] > rank[prev]) byLcText.set(k, o.result);
+    }
+    let wrapped = 0;
+    let surfaced = 0;
+    const misses: string[] = [];
+    for (const gt of spec.groundTruth) {
+      const got = byLcText.get(gt.trim().toLowerCase()) ?? "silent";
+      if (got === "wrap") wrapped++;
+      else if (got === "surfaced") surfaced++;
+      else misses.push(gt);
+    }
+    const n = spec.groundTruth.length;
+    const lines = [
+      `Pre-i18n **${spec.repo}** (\`${spec.beforeCommit}\`, ${n} hardcoded strings the team later translated):`,
+      "",
+      `- wrapped (recall): **${pct(wrapped, n)}** (${wrapped}/${n})` +
+        `  ·  surfaced for review: ${surfaced}  ·  silent miss: ${misses.length}`,
+    ];
+    if (misses.length) {
+      lines.push(`- remaining silent misses: ${misses.map((m) => `\`${m}\``).join(", ")}`);
+      lines.push(`  (documented file-coverage / data-key limitations — see \`recall-excalidraw.json\`)`);
+    }
+    return lines.join("\n");
+  } finally {
+    spawnSync("git", ["-C", repoDir, "worktree", "remove", "--force", wt], { encoding: "utf-8" });
+    spawnSync("git", ["-C", repoDir, "worktree", "prune"], { encoding: "utf-8" });
+  }
+}
+
 /* ------------------------------- report ----------------------------------- */
 
 async function main() {
@@ -207,6 +296,10 @@ async function main() {
       lines.push(`| ${trunc(r.text)} | ${r.expect} | ${tlCell} |`);
     }
   }
+  lines.push("");
+  lines.push("## Recall (pre-i18n checkout)");
+  lines.push("");
+  lines.push(await recallRun());
   lines.push("");
   lines.push("## Scale");
   lines.push("");
