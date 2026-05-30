@@ -35,5 +35,5 @@ Pre-i18n **excalidraw** (`ff7a340d^`, 29 hardcoded strings the team later transl
 
 ## Scale
 
-TransLift on Excalidraw (~240 files): `101 wrap · 10000 skip · 241 dynamic · 260 unresolved · 0 conflict · 635 missing · 0 orphan` in 4.5s wall.
+TransLift on Excalidraw (~240 files): `101 wrap · 10002 skip · 241 dynamic · 258 unresolved · 0 conflict · 635 missing · 0 orphan` in 4.6s wall.
 

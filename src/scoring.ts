@@ -57,6 +57,33 @@ export function score(
   if (s.inImportPath) return { confidence: 1.0, verdict: Verdict.Skip };
   if (s.inUrlShape) return { confidence: 1.0, verdict: Verdict.Skip };
 
+  // Position-based skips for already-handled / structural positions. POSITION,
+  // not value shape: keyed on the string's OWN attribute/object key, so a value
+  // that merely looks like a key isn't affected and real copy elsewhere is never
+  // skipped (this is what guarantees no recall regression).
+  //
+  // `defaultMessage` (react-intl, as a JSX attr `<FormattedMessage defaultMessage=…/>`
+  // or an object key `formatMessage({defaultMessage: …})`) is a foreign-i18n
+  // SOURCE string — already translated; re-wrapping it double-translates. A full
+  // foreign-sink model (recognizing the `formatMessage`/`<FormattedMessage>`
+  // construct itself, roadmap #9) is the real fix; this name-based guard is the
+  // cheap subset that kills the dominant false positives on react-intl codebases.
+  //
+  // `id`/`key` object properties are identifiers, never display copy — they only
+  // reached a Wrap because `inJsxAttribute` walks up to an ancestor attribute
+  // (`placeholder={formatMessage({id: 'a.b.c', …})}`), so the message key was
+  // mis-read as the placeholder's text.
+  if (s.inJsxAttribute === "defaultMessage") {
+    return { confidence: 1.0, verdict: Verdict.Skip };
+  }
+  if (
+    node.kind === StringKind.ObjectProperty &&
+    s.objectPropertyKey &&
+    ALREADY_HANDLED_OR_STRUCTURAL_KEYS.has(s.objectPropertyKey)
+  ) {
+    return { confidence: 1.0, verdict: Verdict.Skip };
+  }
+
   // Dynamic template literals can't be statically wrapped — flag them even when
   // they sit in a sink argument, so this stays above the function-sink check.
   if (node.kind === StringKind.TemplateLiteralDynamic) {
@@ -392,3 +419,14 @@ const UI_COPY_OBJECT_KEY_EXACT = new Set<string>([
 
 const UI_COPY_OBJECT_KEY_SUFFIX =
   /(?:Label|Message|Tooltip|Placeholder|Caption|Hint)$/;
+
+// Object-property keys whose value is never display copy *in that position*:
+// `defaultMessage` is react-intl's already-translated source string; `id`/`key`
+// are identifiers. Skipped decisively (see the position-based guard in score()).
+// Note `defaultMessage` also matches UI_COPY_OBJECT_KEY_SUFFIX (`*Message`) — the
+// guard runs first so it wins.
+const ALREADY_HANDLED_OR_STRUCTURAL_KEYS = new Set<string>([
+  "defaultMessage",
+  "id",
+  "key",
+]);

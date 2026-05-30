@@ -413,6 +413,58 @@ describe("score — gated object-property sinks (real-codebase recall)", () => {
   });
 });
 
+describe("score — position-based foreign-i18n / structural skips (Mattermost FPs)", () => {
+  it("skips a react-intl defaultMessage JSX attribute (<FormattedMessage defaultMessage=…/>)", () => {
+    const r = score(
+      mkNode("Search attributes...", StringKind.JsxAttribute, {
+        inJsxAttribute: "defaultMessage",
+        enclosingFunctionIsComponent: true,
+      }),
+      emptyReg
+    );
+    expect(r.verdict).toBe(Verdict.Skip);
+    expect(r.source).toBeUndefined();
+  });
+
+  it("skips a defaultMessage object property (formatMessage({defaultMessage: …}))", () => {
+    // Even though `defaultMessage` matches the *Message object-key suffix, the
+    // position guard runs first and wins.
+    const r = score(
+      mkNode("Saving Config...", StringKind.ObjectProperty, {
+        objectPropertyKey: "defaultMessage",
+      }),
+      emptyReg
+    );
+    expect(r.verdict).toBe(Verdict.Skip);
+  });
+
+  it("skips a message id object property even when an ancestor attribute is a sink", () => {
+    // `placeholder={formatMessage({id: 'a.b.c', …})}` — inJsxAttribute walks up to
+    // `placeholder` (a registered sink), but the string's OWN key is `id`.
+    const r = score(
+      mkNode("admin.access_control.table_editor.selector.filter_attributes", StringKind.ObjectProperty, {
+        objectPropertyKey: "id",
+        inJsxAttribute: "placeholder",
+      }),
+      { components: [], attributes: [{ name: "placeholder" }], functions: [] }
+    );
+    expect(r.verdict).toBe(Verdict.Skip);
+    expect(r.source).toBeUndefined();
+  });
+
+  it("position guard is name-based, not shape-based: a real label keyed `label` still wraps", () => {
+    // Guarantees no recall regression — only the named positions are skipped.
+    const r = score(
+      mkNode("Change text alignment", StringKind.ObjectProperty, {
+        objectPropertyKey: "label",
+      }),
+      emptyReg
+    );
+    expect(r.verdict).toBe(Verdict.Wrap);
+    expect(r.source).toBe("object-property-sink");
+  });
+});
+
 describe("score — SVG/CSS value-shape skip (real-codebase false positives)", () => {
   // Each value sat in a JSX attribute and was reaching a Wrap verdict. The
   // value-shape penalty (-0.6) plus the structural prop-name penalty keep them
