@@ -52,6 +52,26 @@ const TEST_ASSERTION_METHODS = new Set([
 ]);
 const TEST_ASSERTION_CALLEES = new Set(["expect", "assert"]);
 
+// Foreign i18n conventions — constructs whose string content is ALREADY
+// translated, so we must not re-wrap it (roadmap #9). Matched by name (these are
+// highly distinctive; the same hardcoded-convention approach as the sets above).
+// NOTE: deliberately excludes `t` — that's the convention TransLift produces.
+//   - Calls: react-intl `formatMessage`/`defineMessages`/`defineMessage`,
+//     vue-i18n `$t`, i18next `i18n.t` is already a translation callee.
+//   - Components: react-intl `<FormattedMessage>`/`<FormattedHTMLMessage>`,
+//     Lingui / react-i18next `<Trans>`.
+const I18N_CALL_NAMES = new Set([
+  "formatMessage",
+  "defineMessages",
+  "defineMessage",
+  "$t",
+]);
+const I18N_COMPONENT_NAMES = new Set([
+  "FormattedMessage",
+  "FormattedHTMLMessage",
+  "Trans",
+]);
+
 export class ReactAdapter implements Adapter {
   detect(filePath: string): boolean {
     // Scan plain `.ts`/`.js` too, not just JSX: real UI copy lives in
@@ -411,6 +431,7 @@ function buildSignals(
   let inLoggerCall = false;
   let inTestAssertion = false;
   let inImportPath = false;
+  let enclosingI18n = false;
   let inFunctionSink: { name: string; argIndex: number } | null = null;
 
   // Direct parent: import declaration or require() call.
@@ -444,6 +465,16 @@ function buildSignals(
         inTestAssertion = true;
       }
 
+      // Foreign i18n call: `formatMessage({…})`, `intl.formatMessage(…)`,
+      // `defineMessages({…})`. The callee is either a bare identifier or the
+      // property of a member expression (`intl.formatMessage`).
+      const calleeName = t.isIdentifier(callee)
+        ? callee.name
+        : t.isMemberExpression(callee) && t.isIdentifier(callee.property)
+          ? callee.property.name
+          : null;
+      if (calleeName && I18N_CALL_NAMES.has(calleeName)) enclosingI18n = true;
+
       // Function-sink match — only if the string is a direct argument of this call.
       if (!inFunctionSink) {
         const argIdx = findArgIndex(cursor.node, path.node);
@@ -456,6 +487,18 @@ function buildSignals(
   }
 
   const inThrowStatement = !!path.findParent((p) => p.isThrowStatement());
+
+  // Foreign i18n component: the string is inside `<FormattedMessage …>` or
+  // `<Trans>…</Trans>` — as an attribute (`defaultMessage=`) or as message
+  // children. Either way it's already translated.
+  if (!enclosingI18n) {
+    const i18nEl = path.findParent(
+      (p) =>
+        p.isJSXElement() &&
+        isI18nComponentName((p.node as t.JSXElement).openingElement.name)
+    );
+    if (i18nEl) enclosingI18n = true;
+  }
 
   // URL / path shape.
   const inUrlShape =
@@ -494,6 +537,7 @@ function buildSignals(
     isCodeIdentifier,
     propName,
     objectPropertyKey,
+    enclosingI18n,
     componentName,
     enclosingFunctionIsComponent,
     inFunctionSink,
@@ -529,6 +573,16 @@ function jsxMemberExprToString(node: t.JSXMemberExpression): string {
   }
   if (t.isJSXIdentifier(cur)) parts.unshift(cur.name);
   return parts.join(".");
+}
+
+/** Is this JSX element name a recognized foreign-i18n component? */
+function isI18nComponentName(name: t.JSXOpeningElement["name"]): boolean {
+  if (t.isJSXIdentifier(name)) return I18N_COMPONENT_NAMES.has(name.name);
+  // `Intl.FormattedMessage` etc. — match on the final property.
+  if (t.isJSXMemberExpression(name)) {
+    return I18N_COMPONENT_NAMES.has(name.property.name);
+  }
+  return false;
 }
 
 function findEnclosingComponent(path: NodePath): {

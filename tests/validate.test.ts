@@ -24,6 +24,7 @@ function validSignals(): StringSignals {
     isCodeIdentifier: false,
     propName: null,
     objectPropertyKey: null,
+    enclosingI18n: false,
     componentName: null,
     enclosingFunctionIsComponent: false,
     inFunctionSink: null,

@@ -22,6 +22,7 @@ function emptySignals(overrides: Partial<StringSignals> = {}): StringSignals {
     isCodeIdentifier: false,
     propName: null,
     objectPropertyKey: null,
+    enclosingI18n: false,
     componentName: null,
     enclosingFunctionIsComponent: false,
     inFunctionSink: null,
@@ -413,37 +414,15 @@ describe("score — gated object-property sinks (real-codebase recall)", () => {
   });
 });
 
-describe("score — position-based foreign-i18n / structural skips (Mattermost FPs)", () => {
-  it("skips a react-intl defaultMessage JSX attribute (<FormattedMessage defaultMessage=…/>)", () => {
+describe("score — foreign-i18n (#9) + structural skips (Mattermost FPs)", () => {
+  it("skips any string flagged enclosingI18n, even a copy-bearing one in a sink position", () => {
+    // The structural skip: whatever the key/attr, a string inside formatMessage/
+    // <FormattedMessage>/<Trans> is already translated. Here it even carries a
+    // copy-bearing key and a registered attribute — still skipped.
     const r = score(
-      mkNode("Search attributes...", StringKind.JsxAttribute, {
-        inJsxAttribute: "defaultMessage",
-        enclosingFunctionIsComponent: true,
-      }),
-      emptyReg
-    );
-    expect(r.verdict).toBe(Verdict.Skip);
-    expect(r.source).toBeUndefined();
-  });
-
-  it("skips a defaultMessage object property (formatMessage({defaultMessage: …}))", () => {
-    // Even though `defaultMessage` matches the *Message object-key suffix, the
-    // position guard runs first and wins.
-    const r = score(
-      mkNode("Saving Config...", StringKind.ObjectProperty, {
+      mkNode("Search attributes...", StringKind.ObjectProperty, {
+        enclosingI18n: true,
         objectPropertyKey: "defaultMessage",
-      }),
-      emptyReg
-    );
-    expect(r.verdict).toBe(Verdict.Skip);
-  });
-
-  it("skips a message id object property even when an ancestor attribute is a sink", () => {
-    // `placeholder={formatMessage({id: 'a.b.c', …})}` — inJsxAttribute walks up to
-    // `placeholder` (a registered sink), but the string's OWN key is `id`.
-    const r = score(
-      mkNode("admin.access_control.table_editor.selector.filter_attributes", StringKind.ObjectProperty, {
-        objectPropertyKey: "id",
         inJsxAttribute: "placeholder",
       }),
       { components: [], attributes: [{ name: "placeholder" }], functions: [] }
@@ -452,8 +431,18 @@ describe("score — position-based foreign-i18n / structural skips (Mattermost F
     expect(r.source).toBeUndefined();
   });
 
-  it("position guard is name-based, not shape-based: a real label keyed `label` still wraps", () => {
-    // Guarantees no recall regression — only the named positions are skipped.
+  it("skips a structural `id` object property (message key, not copy)", () => {
+    const r = score(
+      mkNode("admin.access_control.table_editor.selector.filter_attributes", StringKind.ObjectProperty, {
+        objectPropertyKey: "id",
+      }),
+      emptyReg
+    );
+    expect(r.verdict).toBe(Verdict.Skip);
+  });
+
+  it("does NOT skip genuine copy that is NOT inside a foreign-i18n construct", () => {
+    // The recall guarantee: a real hardcoded label (enclosingI18n false) still wraps.
     const r = score(
       mkNode("Change text alignment", StringKind.ObjectProperty, {
         objectPropertyKey: "label",

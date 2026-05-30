@@ -52,6 +52,14 @@ export interface StringSignals {
    * Null otherwise.
    */
   objectPropertyKey: string | null;
+  /**
+   * The string is inside a foreign i18n construct that already translates it —
+   * react-intl `formatMessage(…)` / `<FormattedMessage>` / `defineMessages(…)`,
+   * Lingui or react-i18next `<Trans>`. Such strings must not be re-wrapped
+   * (roadmap #9). Structural: true for any string nested in the construct,
+   * covering its `id`, `defaultMessage`, and message children alike.
+   */
+  enclosingI18n: boolean;
   componentName: string | null;
   enclosingFunctionIsComponent: boolean;
   inFunctionSink: { name: string; argIndex: number } | null;
