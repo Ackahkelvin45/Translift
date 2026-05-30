@@ -9,3 +9,7 @@ coverage/
 .idea/
 translift-phase-0-spec.md
 fixtures/phase-0/
+
+# Local reference checkouts for Phase 2 ts-morph prototype.
+excalidraw/
+graphify/

@@ -4,6 +4,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { run, PipelineResult } from "./pipeline";
 import { walk } from "./walker";
+import { loadConfig } from "./config";
+import { buildProjectGraph } from "./graph-project";
+import { findUnregisteredSinks, HubReport } from "./hub-analysis";
 import { Verdict, UsedTranslationKey } from "./types";
 
 type Catalog = Record<string, Record<string, string>>;
@@ -26,6 +29,8 @@ interface DriftReport {
   conflicts: Conflict[];
   missing: UsedTranslationKey[];
   orphaned: string[];
+  hubs: HubReport;
+  hubMinHits: number;
 }
 
 const program = new Command();
@@ -87,34 +92,50 @@ program
   .command("audit <target>")
   .description("Read-only drift check: missing, orphaned, conflicts, unwrapped. Non-zero exit on actionable drift.")
   .option("-v, --verbose", "Include full per-string signals report", false)
-  .action(async (target: string, options: { verbose: boolean }) => {
-    const report = await gather(target, /* dryRun */ true);
-    if (!report.results.length) {
-      console.log(`No .tsx / .jsx files found under ${target}.`);
-      return;
+  .option(
+    "--strict",
+    "Also fail on [traced] wraps (Pass 2 + weighted Pass 1). Default audit treats those as needing review, not drift.",
+    false
+  )
+  .action(
+    async (target: string, options: { verbose: boolean; strict: boolean }) => {
+      const report = await gather(target, /* dryRun */ true);
+      if (!report.results.length) {
+        console.log(`No .tsx / .jsx files found under ${target}.`);
+        return;
+      }
+
+      printReport(report, options.verbose);
+
+      let directWraps = 0;
+      let tracedWraps = 0;
+      for (const { result } of report.results) {
+        for (const r of result.wrapped) {
+          if (isDirectSource(r.node.confidenceSource)) directWraps++;
+          else tracedWraps++;
+        }
+      }
+
+      const isDirty =
+        report.conflicts.length > 0 ||
+        report.missing.length > 0 ||
+        report.orphaned.length > 0 ||
+        directWraps > 0 ||
+        (options.strict && tracedWraps > 0);
+
+      console.log();
+      if (isDirty) {
+        console.log(`audit: drift detected.`);
+        process.exitCode = 1;
+      } else if (tracedWraps > 0) {
+        console.log(
+          `audit: clean (${tracedWraps} traced wrap${tracedWraps === 1 ? "" : "s"} need review — pass --strict to fail on them).`
+        );
+      } else {
+        console.log(`audit: clean.`);
+      }
     }
-
-    printReport(report, options.verbose);
-
-    const wouldWrapCount = report.results.reduce(
-      (n, r) => n + r.result.wrapped.length,
-      0
-    );
-
-    const isDirty =
-      report.conflicts.length > 0 ||
-      report.missing.length > 0 ||
-      report.orphaned.length > 0 ||
-      wouldWrapCount > 0;
-
-    console.log();
-    if (isDirty) {
-      console.log(`audit: drift detected.`);
-      process.exitCode = 1;
-    } else {
-      console.log(`audit: clean.`);
-    }
-  });
+  );
 
 program.parseAsync();
 
@@ -127,6 +148,34 @@ async function gather(target: string, dryRun: boolean): Promise<DriftReport> {
   const isSingleFile = fs.statSync(absTarget).isFile();
   const { files, root } = walk(target);
 
+  // Search for translift.config.* starting at the walk root (project root for
+  // directory targets, file's parent for single-file invocations), walking up.
+  const config = await loadConfig(root);
+  if (config.sourcePath) {
+    console.log(`config: ${rel(config.sourcePath)}`);
+  }
+
+  // One project graph per invocation. Built before any per-file pipeline runs,
+  // because Pass 2 needs the full graph (a string declared in file A may flow
+  // into a sink in file B). On larger projects this is the dominant CLI cost.
+  const graphContext = buildProjectGraph(root, files);
+
+  // Hub analysis runs over the same graph — purely report-only output that
+  // surfaces likely UI sinks the user hasn't registered yet. We exclude any
+  // configured translation callees (`t`, `i18n.t`, etc.) from the candidate
+  // pool — they're the translation primitive, not unregistered sinks.
+  const excludedFns = new Set(
+    config.translationCallees.map((c) =>
+      c.kind === "identifier" ? c.name : c.property
+    )
+  );
+  const hubs = findUnregisteredSinks(
+    graphContext.graph,
+    config.registry,
+    config.discovery.minHits,
+    excludedFns
+  );
+
   const sharedSlugSet = new Set<string>();
   const results: { file: string; result: PipelineResult }[] = [];
   for (const file of files) {
@@ -134,6 +183,8 @@ async function gather(target: string, dryRun: boolean): Promise<DriftReport> {
     const result = await run(file, content, {
       dryRun,
       usedKeys: sharedSlugSet,
+      config,
+      graphContext,
     });
     results.push({ file, result });
   }
@@ -170,6 +221,8 @@ async function gather(target: string, dryRun: boolean): Promise<DriftReport> {
     conflicts,
     missing,
     orphaned,
+    hubs,
+    hubMinHits: config.discovery.minHits,
   };
 }
 
@@ -247,7 +300,7 @@ function mergeWithConflictTracking(
 // ----------------------------------------------------------------------------
 
 function printReport(report: DriftReport, verbose: boolean) {
-  const { results, root, isSingleFile, conflicts, missing, orphaned } = report;
+  const { results, root, isSingleFile, conflicts, missing, orphaned, hubs, hubMinHits } = report;
 
   const totals = {
     wrap: 0,
@@ -269,54 +322,79 @@ function printReport(report: DriftReport, verbose: boolean) {
     `${totals.wrap} wrap · ${totals.skip} skip · ${totals.dynamic} dynamic · ${totals.unresolved} unresolved · ${conflicts.length} conflict · ${missing.length} missing · ${orphaned.length} orphan`
   );
 
-  for (const { file, result } of results) {
-    if (
-      result.wrapped.length === 0 &&
-      result.flaggedDynamic.length === 0 &&
-      result.unresolved.length === 0
-    )
-      continue;
+  // Per-file detail is verbose-only. Default keeps the report scannable on
+  // large projects (240-file Excalidraw runs were hundreds of lines).
+  if (verbose) {
+    for (const { file, result } of results) {
+      if (
+        result.wrapped.length === 0 &&
+        result.flaggedDynamic.length === 0 &&
+        result.unresolved.length === 0
+      )
+        continue;
 
-    console.log(`\n${rel(file)}`);
+      console.log(`\n${rel(file)}`);
 
-    if (result.wrapped.length > 0) {
-      console.log(`  wrap:`);
-      for (const r of result.wrapped) {
-        const loc = `:${r.node.line}`.padEnd(6);
-        const key = r.keyName.padEnd(38);
-        console.log(`    ${loc} ${key} ${JSON.stringify(r.node.text)}`);
+      if (result.wrapped.length > 0) {
+        console.log(`  wrap:`);
+        for (const r of capped(result.wrapped)) {
+          const loc = `:${r.node.line}`.padEnd(6);
+          const key = r.keyName.padEnd(38);
+          const text = JSON.stringify(r.node.text);
+          console.log(`    ${loc} ${key} ${text}${tagFor(r.node)}`);
+          if (r.node.trace) {
+            for (const step of r.node.trace.path) {
+              console.log(`           └─ ${step}`);
+            }
+            if (r.node.trace.sink) {
+              const [kind, name] = r.node.trace.sink.split(":");
+              console.log(
+                `           └─ ${name} registered as sink (config: ${kind}s)`
+              );
+            }
+          }
+        }
+        printOverflow(result.wrapped.length, "more wrap");
+      }
+      if (result.flaggedDynamic.length > 0) {
+        console.log(`  dynamic (needs review):`);
+        for (const n of capped(result.flaggedDynamic)) {
+          console.log(`    :${n.line}  ${JSON.stringify(n.text)}`);
+        }
+        printOverflow(result.flaggedDynamic.length, "more dynamic");
+      }
+      if (result.unresolved.length > 0) {
+        console.log(`  unresolved (needs review):`);
+        for (const n of capped(result.unresolved)) {
+          console.log(
+            `    :${n.line}  ${JSON.stringify(n.text)}  (confidence ${n.confidence.toFixed(2)})`
+          );
+        }
+        printOverflow(result.unresolved.length, "more unresolved");
       }
     }
-    if (result.flaggedDynamic.length > 0) {
-      console.log(`  dynamic (needs review):`);
-      for (const n of result.flaggedDynamic) {
-        console.log(`    :${n.line}  ${JSON.stringify(n.text)}`);
-      }
-    }
-    if (result.unresolved.length > 0) {
-      console.log(`  unresolved (needs review):`);
-      for (const n of result.unresolved) {
-        console.log(
-          `    :${n.line}  ${JSON.stringify(n.text)}  (confidence ${n.confidence.toFixed(2)})`
-        );
-      }
-    }
+  } else if (totals.wrap + totals.dynamic + totals.unresolved > 0) {
+    console.log(`(run with --verbose to see per-file details)`);
   }
 
   if (conflicts.length > 0) {
     console.log(`\nConflicts (existing en.json values preserved):`);
-    for (const c of conflicts) {
+    const v = sliceSection(conflicts, verbose);
+    for (const c of v.shown) {
       console.log(
         `  ${c.key}  ${JSON.stringify(c.existingValue)} ≠ ${JSON.stringify(c.newValue)}  (${rel(c.file)}:${c.line}:${c.column})`
       );
     }
+    printSectionOverflow(v.overflow);
   }
 
   if (missing.length > 0) {
     console.log(`\nMissing keys (used in source, absent from en.json):`);
-    for (const u of missing) {
+    const v = sliceSection(missing, verbose);
+    for (const u of v.shown) {
       console.log(`  ${u.keyName}  (${rel(u.file)}:${u.line}:${u.column})`);
     }
+    printSectionOverflow(v.overflow);
   }
 
   if (orphaned.length > 0) {
@@ -329,9 +407,27 @@ function printReport(report: DriftReport, verbose: boolean) {
         `           since keys may be used in files outside this scan.`
       );
     }
-    for (const k of orphaned) {
-      console.log(`  ${k}`);
+    const v = sliceSection(orphaned, verbose);
+    for (const k of v.shown) console.log(`  ${k}`);
+    printSectionOverflow(v.overflow);
+  }
+
+  if (hubs.functions.length > 0 || hubs.components.length > 0) {
+    console.log(
+      `\nPossible unregistered sinks (≥ ${hubMinHits} string-bearing hits):`
+    );
+    const f = sliceSection(hubs.functions, verbose);
+    for (const fn of f.shown) {
+      console.log(`  function ${fn.name}  (${fn.hits} hits)`);
+      for (const s of fn.samples) console.log(`    ${rel(s.file)}:${s.line}`);
     }
+    printSectionOverflow(f.overflow, "more functions");
+    const c = sliceSection(hubs.components, verbose);
+    for (const cp of c.shown) {
+      console.log(`  component <${cp.name}>  (${cp.hits} hits)`);
+      for (const s of cp.samples) console.log(`    ${rel(s.file)}:${s.line}`);
+    }
+    printSectionOverflow(c.overflow, "more components");
   }
 
   if (verbose) {
@@ -357,4 +453,56 @@ function safeRead(p: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Per-file cap (wrap/dynamic/unresolved lists inside one file in --verbose). */
+const PER_SECTION_CAP = 5;
+/** Project-wide cap for default (non-verbose) mode. --verbose shows all. */
+const GLOBAL_SECTION_CAP = 10;
+
+function capped<T>(items: T[]): T[] {
+  return items.slice(0, PER_SECTION_CAP);
+}
+
+function printOverflow(total: number, label: string): void {
+  const overflow = total - PER_SECTION_CAP;
+  if (overflow > 0) {
+    console.log(`    ... and ${overflow} ${label}`);
+  }
+}
+
+function sliceSection<T>(
+  items: T[],
+  verbose: boolean
+): { shown: T[]; overflow: number } {
+  if (verbose) return { shown: items, overflow: 0 };
+  const shown = items.slice(0, GLOBAL_SECTION_CAP);
+  return { shown, overflow: items.length - shown.length };
+}
+
+function printSectionOverflow(overflow: number, label: string = "more"): void {
+  if (overflow > 0) {
+    console.log(`  ... and ${overflow} ${label} (--verbose to see all)`);
+  }
+}
+
+function isDirectSource(
+  source: import("./types").ConfidenceSource | undefined
+): boolean {
+  return (
+    source === "jsx-text" ||
+    source === "attribute-sink" ||
+    source === "function-sink"
+  );
+}
+
+function tagFor(node: import("./types").StringNode): string {
+  const src = node.confidenceSource;
+  if (!src) return " [direct]"; // defensive — every wrap should have a source
+  if (isDirectSource(src)) return " [direct]";
+  if (src === "traced" && node.trace) {
+    return ` [traced, depth ${node.trace.depth}]`;
+  }
+  // `weighted` (Pass 1 weighted-score wrap) — tagged [traced] per spec, no depth.
+  return " [traced]";
 }
