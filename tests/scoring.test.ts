@@ -114,6 +114,58 @@ describe("score — confidence source for weighted wraps", () => {
   });
 });
 
+describe("score — #2 IDENT_SHAPE: registered sink beats the identifier skip", () => {
+  const notifyReg: SinkRegistry = {
+    components: [],
+    attributes: [],
+    functions: [{ name: "notify", uiArgs: [0] }],
+  };
+
+  it("wraps an identifier-shaped string when it's a registered function-sink arg", () => {
+    // "Saved" matches IDENT_SHAPE (isCodeIdentifier). Pre-fix it was hard-skipped
+    // before the function-sink check ever ran — the silent miss this fixes.
+    const r = score(
+      mkNode("Saved", StringKind.CallArgument, {
+        isCodeIdentifier: true,
+        inFunctionSink: { name: "notify", argIndex: 0 },
+      }),
+      notifyReg
+    );
+    expect(r.verdict).toBe(Verdict.Wrap);
+    expect(r.source).toBe("function-sink");
+  });
+
+  it("still skips an identifier-shaped string that is NOT a registered sink", () => {
+    const r = score(
+      mkNode("Config", StringKind.StringLiteral, { isCodeIdentifier: true }),
+      notifyReg
+    );
+    expect(r.verdict).toBe(Verdict.Skip);
+    expect(r.source).toBeUndefined();
+  });
+
+  it("console.log still wins over a registered sink (decisive non-UI skip stays on top)", () => {
+    const r = score(
+      mkNode("Saved", StringKind.CallArgument, {
+        inConsoleCall: true,
+        inFunctionSink: { name: "notify", argIndex: 0 },
+      }),
+      notifyReg
+    );
+    expect(r.verdict).toBe(Verdict.Skip);
+  });
+
+  it("a dynamic template in a sink arg is still flagged, not wrapped", () => {
+    const r = score(
+      mkNode("Saved ${x}", StringKind.TemplateLiteralDynamic, {
+        inFunctionSink: { name: "notify", argIndex: 0 },
+      }),
+      notifyReg
+    );
+    expect(r.verdict).toBe(Verdict.FlagDynamic);
+  });
+});
+
 describe("score — F7 prop-name heuristics (P4)", () => {
   it("boosts a UI-copy prop name toward Wrap", () => {
     // +0.3 component +0.35 (label, F7) +0.2 space +0.05 cap = 0.9 → Wrap.

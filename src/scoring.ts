@@ -48,12 +48,38 @@ export function score(
 ): ScoreResult {
   const s = node.signals;
 
-  // Hard skips — decisive non-UI signals.
+  // Hard skips — decisive non-UI signals. These win even over a registered
+  // sink: a console.log / logger call / test assertion is never UI copy.
   if (s.inConsoleCall) return { confidence: 1.0, verdict: Verdict.Skip };
   if (s.inLoggerCall) return { confidence: 1.0, verdict: Verdict.Skip };
   if (s.inTestAssertion) return { confidence: 1.0, verdict: Verdict.Skip };
   if (s.inImportPath) return { confidence: 1.0, verdict: Verdict.Skip };
   if (s.inUrlShape) return { confidence: 1.0, verdict: Verdict.Skip };
+
+  // Dynamic template literals can't be statically wrapped — flag them even when
+  // they sit in a sink argument, so this stays above the function-sink check.
+  if (node.kind === StringKind.TemplateLiteralDynamic) {
+    return { confidence: 1.0, verdict: Verdict.FlagDynamic };
+  }
+
+  // Function call sinks. This MUST run before the code-identifier skip below:
+  // an explicit registration ("notify is a sink") has to beat the IDENT_SHAPE
+  // heuristic — otherwise `notify("Saved")` is silently skipped because "Saved"
+  // looks like an identifier. A non-match falls through to the heuristics.
+  if (s.inFunctionSink) {
+    const match = matchFunctionSink(node, s.inFunctionSink, registry, ctx);
+    if (match) {
+      return {
+        confidence: 0.95,
+        verdict: Verdict.Wrap,
+        source: "function-sink",
+        ...(match.matchedViaAlias && { matchedViaAlias: match.matchedViaAlias }),
+      };
+    }
+  }
+
+  // Code-identifier hard skip — now AFTER the explicit function-sink check so a
+  // registered sink wins, but still catches bare identifiers everywhere else.
   if (s.isCodeIdentifier && !s.inJsxText) {
     return { confidence: 0.9, verdict: Verdict.Skip };
   }
@@ -61,11 +87,6 @@ export function score(
   // Hard wraps — decisive UI signals.
   if (s.inJsxText && node.kind === StringKind.JsxText) {
     return { confidence: 1.0, verdict: Verdict.Wrap, source: "jsx-text" };
-  }
-
-  // Dynamic template literals — surface to developer.
-  if (node.kind === StringKind.TemplateLiteralDynamic) {
-    return { confidence: 1.0, verdict: Verdict.FlagDynamic };
   }
 
   // Attribute sinks.
@@ -81,19 +102,6 @@ export function score(
         return { confidence: 0.95, verdict: Verdict.Wrap, source: "attribute-sink" };
       }
       if (blocked) return { confidence: 0.9, verdict: Verdict.Skip };
-    }
-  }
-
-  // Function call sinks.
-  if (s.inFunctionSink) {
-    const match = matchFunctionSink(node, s.inFunctionSink, registry, ctx);
-    if (match) {
-      return {
-        confidence: 0.95,
-        verdict: Verdict.Wrap,
-        source: "function-sink",
-        ...(match.matchedViaAlias && { matchedViaAlias: match.matchedViaAlias }),
-      };
     }
   }
 
