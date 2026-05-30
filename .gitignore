@@ -26,3 +26,6 @@ newfeatures.md
 
 # Throwaway Phase 2 decision-gate prototype — kept locally, not published.
 prototype/
+
+# i18next-cli scratch output when running the benchmark.
+benchmark/cases/locales/

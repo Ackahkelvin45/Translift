@@ -1,0 +1,14 @@
+{
+  "_comment": "Human-judged ground truth for the benchmark cases, independent of any tool. `expect` is what a correct i18n tool SHOULD do: wrap genuine user-facing copy, leave non-UI strings alone. `category` groups by why.",
+  "cases": [
+    { "text": "Welcome to your dashboard", "expect": "wrap", "category": "JSX text" },
+    { "text": "You have new messages waiting.", "expect": "wrap", "category": "JSX text" },
+    { "text": "Dismiss", "expect": "wrap", "category": "JSX text (button)" },
+    { "text": "Close notification", "expect": "wrap", "category": "attribute sink (aria-label)" },
+    { "text": "Your payment could not be processed.", "expect": "wrap", "category": "cross-file → <Toast> prop" },
+    { "text": "Your changes have been saved.", "expect": "wrap", "category": "function sink alert()" },
+    { "text": "banner wrapper-large", "expect": "skip", "category": "className (non-UI)" },
+    { "text": "initializing analytics module", "expect": "skip", "category": "console.log (non-UI)" },
+    { "text": "https://api.example.com/v2/data", "expect": "skip", "category": "URL (non-UI)" }
+  ]
+}

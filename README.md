@@ -49,6 +49,27 @@ It also explains skips (`console.log`, identifier-shape, blocked attribute
 sinks), weighted escalations (with the per-signal `+`/`−` breakdown), and
 flags whether a sink matched via an aliased import or an unwrapped wrapper.
 
+## Benchmark
+
+`npm run benchmark` scores TransLift against a small, **human-labeled** ground-truth
+set (`benchmark/cases`) and, if installed, against `i18next-cli lint` on the same
+files. Every string is labeled wrap/skip by judgment, independent of any tool; the
+key metric is **silent misses** — a user-facing string the tool neither wraps nor
+surfaces for review.
+
+| tool | precision | recall | silent misses |
+|---|---|---|---|
+| **TransLift** | 100% | 100% | **0** |
+| i18next-cli lint | 100% | 67% | 2 |
+
+Both tools nail direct JSX text and correctly skip `className` / `console` / URLs.
+The gap is the two strings that need to be resolved *beyond a single JSX literal* —
+a string declared in one file and passed cross-file into a `<Toast>` prop, and a
+`alert(...)` sink call — which a line-by-line linter silently drops. TransLift's
+symbol graph + sink registry catch both. See [benchmark/RESULTS.md](benchmark/RESULTS.md)
+(regenerate with `npm run benchmark`); the scale pass also reports raw counts +
+wall time on Excalidraw (~240 files).
+
 ## Configuration
 
 TransLift's default sink registry covers common React patterns (`<Toast>`, `aria-label`, `toast()` from `react-hot-toast`/`sonner`, etc.). If your codebase uses different component or function names for UI output, register them in a config file at the project root.
