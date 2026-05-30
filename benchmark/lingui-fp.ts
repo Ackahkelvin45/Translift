@@ -36,7 +36,15 @@ interface Region {
 }
 
 const LINGUI_JSX = new Set(["Trans", "Plural", "Select", "SelectOrdinal"]);
-const LINGUI_CALLEES = new Set(["t", "msg", "_", "plural", "select", "selectOrdinal", "defineMessage"]);
+// Tagged-template macros: here `t` is unambiguously Lingui (`` t`Hello` ``).
+const LINGUI_TAG_CALLEES = new Set(["t", "msg", "plural", "select", "selectOrdinal"]);
+// Call-form Lingui markers. Bare `t` is DELIBERATELY EXCLUDED — `t(key, default)`
+// is also i18next's OUTPUT callee, so counting it as a Lingui region would make
+// every i18next wrap self-match as a false positive. A re-translation FP is a
+// wrap landing inside an UNAMBIGUOUS already-translated construct: `msg(...)`,
+// `_(...)` (useLingui runtime), `plural/select(...)`, `defineMessage(...)`, or a
+// `<Trans>/<Plural>` element / Lingui tagged template.
+const LINGUI_CALL_CALLEES = new Set(["msg", "_", "plural", "select", "selectOrdinal", "defineMessage"]);
 
 function calleeName(node: t.Node): string | null {
   if (t.isIdentifier(node)) return node.name;
@@ -73,11 +81,11 @@ function linguiRegions(content: string, filename: string): Region[] {
     },
     TaggedTemplateExpression(p) {
       const n = calleeName(p.node.tag);
-      if (n && LINGUI_CALLEES.has(n)) push(p.node);
+      if (n && LINGUI_TAG_CALLEES.has(n)) push(p.node);
     },
     CallExpression(p) {
       const n = calleeName(p.node.callee);
-      if (n && LINGUI_CALLEES.has(n)) push(p.node);
+      if (n && LINGUI_CALL_CALLEES.has(n)) push(p.node);
     },
   });
   return regions;
