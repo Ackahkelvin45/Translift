@@ -36,12 +36,9 @@
     "With Background"
   ],
   "knownMisses": {
-    "_comment": "Documented, accepted limitations — NOT silent regressions. Track here so a recall drop below the expected ~79% signals a real problem.",
-    "Copy Styles": "declared in actions/actionStyles.ts (.ts file — adapter.detect only matches .tsx/.jsx; file-coverage gap)",
-    "Paste Styles": "same .ts file-coverage gap",
-    "Select All": "actions/actionSelectAll.ts — .ts file-coverage gap",
+    "_comment": "Documented, accepted limitations — NOT silent regressions. Track here so a recall drop below the expected ~90% signals a real problem. (Copy Styles / Paste Styles / Select All were recovered once adapter.detect was extended to scan .ts files.)",
     "Code": "font-option `text:` object property — `text` excluded from the object-key gate to avoid element-content false positives",
     "Normal": "font-option `text:` object property — same tradeoff"
   },
-  "expectedRecallPct": 79
+  "expectedRecallPct": 90
 }

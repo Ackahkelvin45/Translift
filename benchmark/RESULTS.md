@@ -29,11 +29,11 @@ Ground-truth set: **13 labeled strings** in `benchmark/cases`.
 
 Pre-i18n **excalidraw** (`ff7a340d^`, 29 hardcoded strings the team later translated):
 
-- wrapped (recall): **79%** (23/29)  ·  surfaced for review: 1  ·  silent miss: 5
-- remaining silent misses: `Code`, `Copy Styles`, `Normal`, `Paste Styles`, `Select All`
+- wrapped (recall): **90%** (26/29)  ·  surfaced for review: 1  ·  silent miss: 2
+- remaining silent misses: `Code`, `Normal`
   (documented file-coverage / data-key limitations — see `recall-excalidraw.json`)
 
 ## Scale
 
-TransLift on Excalidraw (~240 files): `101 wrap · 10002 skip · 241 dynamic · 258 unresolved · 0 conflict · 635 missing · 0 orphan` in 4.6s wall.
+TransLift on Excalidraw (~240 files): `154 wrap · 15695 skip · 516 dynamic · 298 unresolved · 0 conflict · 661 missing · 0 orphan` in 5.8s wall.
 

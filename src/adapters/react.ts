@@ -54,7 +54,11 @@ const TEST_ASSERTION_CALLEES = new Set(["expect", "assert"]);
 
 export class ReactAdapter implements Adapter {
   detect(filePath: string): boolean {
-    return /\.(tsx|jsx)$/.test(filePath);
+    // Scan plain `.ts`/`.js` too, not just JSX: real UI copy lives in
+    // non-component modules (action definitions, constants, `contextItemLabel:`
+    // objects). `.d.ts` is type-only — never UI copy — so it's excluded.
+    if (/\.d\.ts$/.test(filePath)) return false;
+    return /\.(tsx?|jsx?)$/.test(filePath);
   }
 
   extract(fileContent: string, filePath: string): ExtractResult {
