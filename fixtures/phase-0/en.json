@@ -1,0 +1,22 @@
+{
+  "header": {
+    "welcome_back": "Welcome BACK!",
+    "manage_your_account_settings": "Manage your account settings below.",
+    "open_profile_menu": "Open profile menu",
+    "profile": "Profile",
+    "company_logo": "Company logo",
+    "home": "Home",
+    "your_changes_were_saved": "Your changes were saved"
+  },
+  "errorhandler": {
+    "something_went_wrong": "Something went wrong",
+    "please_try_again_or": "Please try again or contact support."
+  },
+  "contactform": {
+    "message_sent_successfully": "Message sent successfully",
+    "your_name": "Your name",
+    "youexamplecom": "you@example.com",
+    "type_your_message_here": "Type your message here...",
+    "send": "Send"
+  }
+}
