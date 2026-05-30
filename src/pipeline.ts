@@ -176,7 +176,13 @@ function runTrace(
   config: ResolvedConfig
 ): {
   resolved: boolean;
-  trace: { sink: string | null; depth: number; path: string[] };
+  trace: {
+    sink: string | null;
+    depth: number;
+    path: string[];
+    viaAlias?: string;
+    viaWrapper?: string;
+  };
 } {
   const candidates = ctx.stringIndex.get(
     stringLiteralKey(node.file, node.line, node.text)
@@ -213,6 +219,8 @@ function runTrace(
         sink: `${result.sink.kind}:${result.sink.name}`,
         depth: result.depth,
         path: result.path.map(formatPathStep),
+        ...(result.sink.matchedViaAlias && { viaAlias: result.sink.matchedViaAlias }),
+        ...(result.sink.matchedViaWrapper && { viaWrapper: result.sink.matchedViaWrapper }),
       },
     };
   }

@@ -8,8 +8,46 @@ See `translift-phase-0-spec.md` for the full spec.
 
 ```bash
 npm install
-npm run cli:dev -- --dry-run fixtures/phase-0/Header.tsx
+npm run build
+node dist/cli.js extract fixtures/phase-0 --dry-run
+# or, without building: npx ts-node src/cli.ts extract fixtures/phase-0 --dry-run
 ```
+
+## Commands
+
+```bash
+translift extract <target> [--dry-run] [-v]   # wrap UI strings in t() and write en.json
+translift audit   <target> [--strict] [-v]    # read-only drift check; non-zero exit on drift
+translift explain <target> "<string>"         # why a string was wrapped / skipped / escalated
+```
+
+### `explain` — why did this string get that verdict?
+
+Every wrap/skip/escalate decision is auditable. `explain` finds a string and
+shows the decisive reason, the weighted-score breakdown (when relevant), and —
+for cross-file cases — the path it traced through the project graph into its
+sink:
+
+```
+$ translift explain ./src "Payment failed completely."
+
+"Payment failed completely."   lib.tsx:1:25
+  verdict: WRAP  (confidence 0.35)
+  why:
+    • traced through the project graph to component:Toast at depth 2
+
+  trace:
+    ◆ "Payment failed completely."  (lib.tsx:1)
+    │
+    ▼ assigned to errorMsg in lib.tsx:1
+    │
+    ▼ passed as prop 'message' to <Toast> in App.tsx:2
+    ✅ sink: component:Toast
+```
+
+It also explains skips (`console.log`, identifier-shape, blocked attribute
+sinks), weighted escalations (with the per-signal `+`/`−` breakdown), and
+flags whether a sink matched via an aliased import or an unwrapped wrapper.
 
 ## Configuration
 

@@ -11,8 +11,9 @@ import { isUiPropName } from "./type-info";
 import { CallExpressionNode } from "./graph";
 
 // Confidence thresholds. Tuned against Phase 0 fixtures; revisit as the corpus grows.
-const HIGH_CONFIDENCE = 0.75;
-const LOW_CONFIDENCE = 0.25;
+// Exported so `explain` can show the same wrap/skip cutoffs the score is judged against.
+export const HIGH_CONFIDENCE = 0.75;
+export const LOW_CONFIDENCE = 0.25;
 
 export interface ScoreResult {
   confidence: number;
@@ -105,33 +106,10 @@ export function score(
     }
   }
 
-  // Weighted scoring for ambiguous strings. Coefficients are priors, not measurements.
-  let weighted = 0;
-
-  if (s.enclosingFunctionIsComponent) weighted += 0.3;
-  if (s.componentName) weighted += 0.1;
-  // F7 (P4) — prop-name heuristics. A string in a JSX attribute is scored by
-  // what the prop name suggests, not a flat boost: copy-bearing names
-  // (`label`, `message`, `*Label`, …) lift it toward Wrap; structural names
-  // (`className`, `id`, `role`, `type`, event handlers, `data-*`) push it down.
-  // Registered attribute sinks (`title`, `placeholder`, `alt`, `aria-label`)
-  // never reach here — the hard attribute-sink rule above already decided them.
-  if (s.inJsxAttribute) {
-    if (isUiCopyPropName(s.inJsxAttribute)) weighted += 0.35;
-    else if (!isUiPropName(s.inJsxAttribute)) weighted -= 0.3;
-    else weighted += 0.2; // generic/unknown prop — pre-F7 behavior
-  }
-  if (node.text.length > 3 && /\s/.test(node.text)) weighted += 0.2;
-  if (/^[A-Z]/.test(node.text)) weighted += 0.05;
-  if (/[.!?]$/.test(node.text)) weighted += 0.1;
-
-  if (s.inThrowStatement) weighted -= 0.2;
-  if (node.text.length < 4) weighted -= 0.2;
-  if (/^[a-z][a-zA-Z]*$/.test(node.text)) weighted -= 0.2;
-  if (/^[A-Z_]+$/.test(node.text)) weighted -= 0.3;
-  if (/^\d+$/.test(node.text)) weighted -= 0.5;
-
-  weighted = Math.max(0, Math.min(1, weighted));
+  // Weighted scoring for ambiguous strings. The per-term breakdown lives in
+  // `weightedSignals` (single source of truth, reused by `explain`); the score
+  // is its clamped sum. Coefficients are priors, not measurements.
+  const weighted = weightedScore(node);
 
   if (weighted >= HIGH_CONFIDENCE) {
     return { confidence: weighted, verdict: Verdict.Wrap, source: "weighted" };
@@ -221,6 +199,58 @@ function matchFunctionSink(
 function isUiCopyPropName(prop: string): boolean {
   if (UI_COPY_PROP_EXACT.has(prop)) return true;
   return UI_COPY_PROP_SUFFIX.test(prop);
+}
+
+/** One contributing term in the weighted score, with a human-readable label. */
+export interface WeightedTerm {
+  label: string;
+  delta: number;
+}
+
+/**
+ * The weighted-scoring terms that fired for `node`, each with its signed delta.
+ * Single source of truth: `score()` sums these (clamped) and the `explain`
+ * command renders them. Evaluation order preserved for readability.
+ */
+export function weightedSignals(node: StringNode): WeightedTerm[] {
+  const s = node.signals;
+  const t = node.text;
+  const terms: WeightedTerm[] = [];
+  const add = (cond: boolean, label: string, delta: number) => {
+    if (cond) terms.push({ label, delta });
+  };
+
+  add(s.enclosingFunctionIsComponent, "inside a component function", 0.3);
+  add(!!s.componentName, "enclosing component name present", 0.1);
+  // F7 (P4) prop-name heuristics — copy-bearing props lift, structural props
+  // penalize, others get the flat pre-F7 boost. Registered attribute sinks
+  // never reach weighted scoring (the hard attribute-sink rule decides them).
+  if (s.inJsxAttribute) {
+    if (isUiCopyPropName(s.inJsxAttribute)) {
+      terms.push({ label: `copy-bearing prop "${s.inJsxAttribute}"`, delta: 0.35 });
+    } else if (!isUiPropName(s.inJsxAttribute)) {
+      terms.push({ label: `structural prop "${s.inJsxAttribute}"`, delta: -0.3 });
+    } else {
+      terms.push({ label: `prop "${s.inJsxAttribute}"`, delta: 0.2 });
+    }
+  }
+  add(t.length > 3 && /\s/.test(t), "contains whitespace (sentence-like)", 0.2);
+  add(/^[A-Z]/.test(t), "starts with a capital", 0.05);
+  add(/[.!?]$/.test(t), "ends with sentence punctuation", 0.1);
+
+  add(s.inThrowStatement, "inside a throw statement", -0.2);
+  add(t.length < 4, "very short (<4 chars)", -0.2);
+  add(/^[a-z][a-zA-Z]*$/.test(t), "single lowercase identifier", -0.2);
+  add(/^[A-Z_]+$/.test(t), "SCREAMING_CASE constant", -0.3);
+  add(/^\d+$/.test(t), "purely numeric", -0.5);
+
+  return terms;
+}
+
+/** Clamped sum of `weightedSignals` — the weighted confidence in [0, 1]. */
+export function weightedScore(node: StringNode): number {
+  const sum = weightedSignals(node).reduce((acc, term) => acc + term.delta, 0);
+  return Math.max(0, Math.min(1, sum));
 }
 
 const UI_COPY_PROP_EXACT = new Set<string>([

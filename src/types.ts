@@ -65,6 +65,10 @@ export interface StringNode {
     sink: string | null;
     depth: number;
     path: string[];
+    /** Source-code name when the sink matched via an aliased import (F3). */
+    viaAlias?: string;
+    /** Source-code tag name when the sink matched by unwrapping a wrapper (F6). */
+    viaWrapper?: string;
   };
   contextSnippet: string;
 }

@@ -7,7 +7,8 @@ import { walk } from "./walker";
 import { loadConfig } from "./config";
 import { buildProjectGraph } from "./graph-project";
 import { findUnregisteredSinks, HubReport } from "./hub-analysis";
-import { Verdict, UsedTranslationKey } from "./types";
+import { explainNode, renderExplanationText } from "./explain";
+import { SinkRegistry, Verdict, UsedTranslationKey } from "./types";
 
 type Catalog = Record<string, Record<string, string>>;
 
@@ -31,6 +32,7 @@ interface DriftReport {
   orphaned: string[];
   hubs: HubReport;
   hubMinHits: number;
+  registry: SinkRegistry;
 }
 
 const program = new Command();
@@ -137,6 +139,47 @@ program
     }
   );
 
+program
+  .command("explain <target> <string>")
+  .description("Explain why a specific string was wrapped / skipped / escalated, with its trace path.")
+  .action(async (target: string, needle: string) => {
+    const report = await gather(target, /* dryRun */ true);
+    if (!report.results.length) {
+      console.log(`No .tsx / .jsx files found under ${target}.`);
+      return;
+    }
+
+    const matches = report.results.flatMap((r) =>
+      r.result.nodes.filter((n) => n.text === needle)
+    );
+
+    if (matches.length === 0) {
+      console.log(`No string exactly matching ${JSON.stringify(needle)} found under ${target}.`);
+      const near = [
+        ...new Set(
+          report.results.flatMap((r) =>
+            r.result.nodes
+              .filter((n) => n.text.includes(needle))
+              .map((n) => n.text)
+          )
+        ),
+      ].slice(0, 5);
+      if (near.length) {
+        console.log(`Did you mean:`);
+        for (const t of near) console.log(`  ${JSON.stringify(t)}`);
+      }
+      return;
+    }
+
+    console.log(
+      `${matches.length} occurrence${matches.length === 1 ? "" : "s"} of ${JSON.stringify(needle)}:\n`
+    );
+    matches.forEach((node, i) => {
+      if (i > 0) console.log(`\n${"─".repeat(60)}\n`);
+      console.log(renderExplanationText(explainNode(node, report.registry)));
+    });
+  });
+
 program.parseAsync();
 
 // ----------------------------------------------------------------------------
@@ -223,6 +266,7 @@ async function gather(target: string, dryRun: boolean): Promise<DriftReport> {
     orphaned,
     hubs,
     hubMinHits: config.discovery.minHits,
+    registry: config.registry,
   };
 }
 
